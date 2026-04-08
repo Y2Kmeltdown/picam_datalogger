@@ -1,0 +1,32 @@
+{
+  "_comment": "PiCam Recorder – startup configuration. All fields are optional; missing keys fall back to built-in defaults.",
+
+  "resolution": {
+    "width": 1280,
+    "height": 720
+  },
+
+  "framerate": 30,
+
+  "format": "XRGB8888",
+
+  "record_format": "h264",
+
+  "output_dir": "recordings",
+
+  "socket_path": "/tmp/picam_frames.sock",
+
+  "controls": {
+    "_comment": "Picamera2 control names. Remove or set to 0 / false to use camera defaults.",
+
+    "AwbMode": 0,
+    "AeEnable": true,
+    "AnalogueGain": 1.0,
+    "Brightness": 0.0,
+    "Contrast": 1.0,
+    "Saturation": 1.0,
+    "Sharpness": 1.0,
+    "ExposureTime": 0,
+    "NoiseReductionMode": 1
+  }
+}
