@@ -180,7 +180,7 @@ class FrameSocketServer:
 # ---------------------------------------------------------------------------
 
 def _utc_filename(output_dir: str) -> str:
-    name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".h264"
+    name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+ "_picam" + ".h264"
     return os.path.join(output_dir, name)
 
 
