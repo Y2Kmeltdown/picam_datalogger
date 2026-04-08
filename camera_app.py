@@ -99,6 +99,7 @@ class FrameSocketServer:
         │ 4 bytes (uint32 LE)  │  N bytes (raw pixels)  │
         │ payload length       │  format = cfg["format"]│
         └──────────────────────┴────────────────────────┘
+    TODO Add timestamp to socket frames
     """
 
     def __init__(self, socket_path: str):
@@ -360,7 +361,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--config", "-c", default="camera_config.json", metavar="FILE",
                         help="Path to JSON configuration file.")
-    parser.add_argument("--segment-duration", "-d", type=float, default=300.0, metavar="SECONDS",
+    parser.add_argument("--segment-duration", "-d", type=float, default=60.0, metavar="SECONDS",
                         help="Length of each recorded video segment in seconds.")
     parser.add_argument("--socket", "-s", default=None, metavar="PATH",
                         help="Override the Unix socket path from config.")
