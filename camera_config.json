@@ -1,12 +1,17 @@
 {
   "_comment": "PiCam Recorder – startup configuration. All fields are optional; missing keys fall back to built-in defaults.",
 
-  "resolution": {
+  "recording_resolution": {
     "width": 1280,
     "height": 720
   },
 
-  "framerate": 30,
+  "socket_resolution": {
+    "width": 1280,
+    "height": 720
+  },
+
+  "framerate": 120,
 
   "format": "XRGB8888",
 

@@ -261,16 +261,20 @@ class SegmentedRecorder:
 
     # ------------------------------------------------------------------
     def configure(self):
-        res = self.cfg["resolution"]
-        w, h = res["width"], res["height"]
+        rec_res = self.cfg["recording_resolution"]
+        r_w, r_h = rec_res["width"], rec_res["height"]
+
+        soc_res = self.cfg["socket_resolution"]
+        s_w, s_h = soc_res["width"], soc_res["height"]
         fps = self.cfg["framerate"]
         fmt = self.cfg["format"]
 
-        log.info("Configuring: %dx%d @ %d fps | socket format: %s", w, h, fps, fmt)
+        log.info("Configuring: %dx%d @ %d fps | socket format: %s", r_w, r_h, fps, fmt)
 
         video_config = self.camera.create_video_configuration(
-            main={"size": (w, h), "format": "RGB888"},  # main → H264 encoder
-            lores={"size": (w, h), "format": fmt},       # lores → Unix socket
+            main={"size": (r_w, r_h), "format": "RGB888"},  # main → H264 encoder
+            lores={"size": (s_w, s_h), "format": fmt},       # lores → Unix socket
+            #raw={"size": self.camera.sensor_resolution},  # 
             controls={"FrameRate": fps},
         )
         self.camera.configure(video_config)
@@ -287,10 +291,26 @@ class SegmentedRecorder:
             try:
                 frame = self.camera.capture_array("lores")
                 self.socket_server.send_frame(frame.tobytes())
+                    
             except Exception as exc:
                 if self._running:
                     log.debug("Frame grab error: %s", exc)
         log.info("Frame capture loop stopped.")
+
+    # def _snapshot_loop(self):
+    #     log.info("snapshot capture loop started.")
+    #     while self._running:
+    #         try:
+    #             time.sleep(1)
+    #             #start = time.monotonic_ns()
+    #             #frame = self.camera.capture_array("raw").view(np.uint16)
+    #             #end = time.monotonic_ns()
+    #             #print(end - start)
+                    
+    #         except Exception as exc:
+    #             if self._running:
+    #                 log.debug("snapshot error: %s", exc)
+    #     log.info("snapshot capture loop stopped.")
 
     # ------------------------------------------------------------------
     def run(self):
@@ -302,6 +322,11 @@ class SegmentedRecorder:
             target=self._frame_loop, daemon=True, name="frame-cap"
         )
         self._frame_thread.start()
+
+        # self._snapshot_thread = threading.Thread(
+        #     target=self._snapshot_loop, daemon=True, name="snapshot-cap"
+        # )
+        # self._snapshot_thread.start()
 
         output = SegmentingOutput(self.cfg["output_dir"], self.segment_duration)
         #encoder = H264Encoder(quality=Quality.HIGH)
