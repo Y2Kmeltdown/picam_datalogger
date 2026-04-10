@@ -105,8 +105,9 @@ Multiple clients can connect simultaneously; each receives every frame.
 
 ```jsonc
 {
-  "resolution": { "width": 1920, "height": 1080 },
-  "framerate": 30,
+  "record_resolution": { "width": 1280, "height": 720 },
+  "socket_resolution": { "width": 1280, "height": 720 },
+  "framerate": 120,
   "format": "XRGB8888",       // lores (raw-frame) pixel format
   "record_format": "h264",
   "output_dir": "recordings",

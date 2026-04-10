@@ -10,11 +10,13 @@ Stream parameters (FPS, JPEG quality, output resolution) can be changed
 at runtime via a JSON REST API without restarting the server.
 
 Endpoints:
-    GET  /               Embedded viewer HTML page
-    GET  /stream         MJPEG multipart stream
-    GET  /snapshot       Latest frame as a single JPEG
-    GET  /api/settings   Return current stream settings (JSON)
-    PUT  /api/settings   Update one or more settings (JSON body)
+    GET  /                  Embedded viewer HTML page
+    GET  /stream            MJPEG multipart stream
+    GET  /snapshot          Latest frame as a single JPEG
+    GET  /api/settings      Return current stream settings (JSON)
+    PUT  /api/settings      Update one or more settings (JSON body)
+    GET  /api/streaming     Return streaming state  {"streaming": true|false}
+    PUT  /api/streaming     Set streaming state     {"streaming": true|false}
 
 Usage:
     python mjpeg_server.py
@@ -139,12 +141,22 @@ class FrameDistributor:
     Holds the latest JPEG and fans it out to all connected HTTP clients via
     per-client asyncio Queues. Slow clients have their oldest frame dropped
     rather than blocking the pipeline.
+
+    The streaming gate (self.streaming) can be toggled via the API.
+    When False:
+      - publish() still accepts frames so the socket reader keeps draining
+        and latest_jpeg stays fresh for /snapshot, but nothing is pushed
+        to client queues so active /stream connections pause silently.
+      - New /stream requests receive a 503 immediately rather than hanging.
+    When set back to True, all currently-connected clients resume instantly
+    with no reconnect required on either side.
     """
 
     def __init__(self):
         self._queues: list[Queue[bytes]] = []
         self._lock = asyncio.Lock()
         self.latest_jpeg: Optional[bytes] = None
+        self.streaming: bool = True          # gate: controlled by /api/streaming
 
     async def register(self) -> Queue:
         q: Queue[bytes] = Queue(maxsize=2)
@@ -162,7 +174,13 @@ class FrameDistributor:
         log.info("MJPEG client unregistered (remaining: %d).", len(self._queues))
 
     async def publish(self, jpeg: bytes):
+        # Always update latest_jpeg so /snapshot stays current even when paused
         self.latest_jpeg = jpeg
+
+        # Gate: skip fan-out when streaming is disabled
+        if not self.streaming:
+            return
+
         async with self._lock:
             dead = []
             for q in self._queues:
@@ -288,8 +306,15 @@ async def socket_reader(
 # ---------------------------------------------------------------------------
 
 async def handle_stream(request: web.Request) -> web.StreamResponse:
-    """Serve the MJPEG multipart stream to one client."""
+    """Serve the MJPEG multipart stream to one client.
+
+    Returns 503 immediately if streaming is currently disabled so clients
+    get a clear error rather than an open connection that never sends frames.
+    """
     distributor: FrameDistributor = request.app["distributor"]
+
+    if not distributor.streaming:
+        raise web.HTTPServiceUnavailable(reason="Streaming is currently disabled.")
 
     response = web.StreamResponse(
         status=200,
@@ -337,7 +362,7 @@ async def handle_snapshot(request: web.Request) -> web.Response:
 
 
 async def handle_index(request: web.Request) -> web.Response:
-    """Minimal HTML viewer page."""
+    """Minimal HTML viewer page with a streaming toggle button."""
     host = request.host
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -346,18 +371,74 @@ async def handle_index(request: web.Request) -> web.Response:
   <title>PiCam Live</title>
   <style>
     body {{ margin: 0; background: #111; display: flex; flex-direction: column;
-            align-items: center; justify-content: center; min-height: 100vh; font-family: monospace; }}
-    img  {{ max-width: 100%; border: 2px solid #333; }}
-    p    {{ color: #aaa; margin-top: 0.5em; font-size: 0.85em; }}
+            align-items: center; justify-content: center; min-height: 100vh;
+            font-family: monospace; gap: 0.75rem; padding: 1rem; }}
+    #feed {{ max-width: 100%; border: 2px solid #333; }}
+    .info {{ color: #aaa; font-size: 0.85em; text-align: center; }}
+    .info a {{ color: #7dd3fc; text-decoration: none; }}
+    #toggle {{
+      padding: 0.4rem 1.2rem; border: none; border-radius: 4px; cursor: pointer;
+      font-family: monospace; font-size: 0.85rem; letter-spacing: 0.05em;
+      transition: background 0.15s;
+    }}
+    #toggle.on  {{ background: #dc2626; color: #fff; }}
+    #toggle.off {{ background: #16a34a; color: #fff; }}
+    #status {{ font-size: 0.75rem; color: #64748b; min-height: 1em; }}
   </style>
 </head>
 <body>
-  <img src="/stream" alt="PiCam live stream">
-  <p>
-    stream: http://{host}/stream &nbsp;|&nbsp;
-    snapshot: http://{host}/snapshot &nbsp;|&nbsp;
-    settings: http://{host}/api/settings
-  </p>
+  <img id="feed" src="/stream" alt="PiCam live stream"
+       onerror="this.alt='Stream paused or unavailable'">
+  <div class="info">
+    <a href="/stream">/stream</a> &nbsp;|&nbsp;
+    <a href="/snapshot">/snapshot</a> &nbsp;|&nbsp;
+    <a href="/api/settings">/api/settings</a> &nbsp;|&nbsp;
+    <a href="/api/streaming">/api/streaming</a>
+  </div>
+  <button id="toggle" class="on">Disable stream</button>
+  <div id="status"></div>
+
+  <script>
+    const feed   = document.getElementById("feed");
+    const btn    = document.getElementById("toggle");
+    const status = document.getElementById("status");
+    let active = true;
+
+    async function fetchState() {{
+      try {{
+        const r = await fetch("/api/streaming");
+        const d = await r.json();
+        setState(d.streaming);
+      }} catch (e) {{ /* ignore on load */ }}
+    }}
+
+    function setState(on) {{
+      active = on;
+      btn.textContent = on ? "Disable stream" : "Enable stream";
+      btn.className   = on ? "on" : "off";
+      if (on && !feed.src.endsWith("/stream")) {{
+        feed.src = "/stream?" + Date.now();   // force reload after re-enable
+      }}
+    }}
+
+    btn.addEventListener("click", async () => {{
+      const next = !active;
+      try {{
+        const r = await fetch("/api/streaming", {{
+          method:  "PUT",
+          headers: {{"Content-Type": "application/json"}},
+          body:    JSON.stringify({{streaming: next}}),
+        }});
+        const d = await r.json();
+        setState(d.streaming);
+        status.textContent = d.streaming ? "Stream enabled." : "Stream disabled.";
+      }} catch (e) {{
+        status.textContent = "Error: " + e.message;
+      }}
+    }});
+
+    fetchState();
+  </script>
 </body>
 </html>"""
     return web.Response(text=html, content_type="text/html")
@@ -422,6 +503,61 @@ async def handle_put_settings(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# HTTP handlers — streaming on/off API
+# ---------------------------------------------------------------------------
+
+async def handle_get_streaming(request: web.Request) -> web.Response:
+    """
+    GET /api/streaming
+
+    Returns the current streaming state.
+
+    Example response:
+        {"streaming": true}
+    """
+    distributor: FrameDistributor = request.app["distributor"]
+    return web.json_response({"streaming": distributor.streaming})
+
+
+async def handle_put_streaming(request: web.Request) -> web.Response:
+    """
+    PUT /api/streaming
+
+    Enables or disables the MJPEG stream fan-out.
+
+    Request body:
+        {"streaming": true}   — resume sending frames to all /stream clients
+        {"streaming": false}  — stop sending frames; connections stay open,
+                                /snapshot stays fresh, socket keeps draining
+
+    Returns the updated state:
+        {"streaming": false}
+
+    Examples:
+        curl -X PUT http://pi:8080/api/streaming \\
+             -H 'Content-Type: application/json' \\
+             -d '{"streaming": false}'
+    """
+    distributor: FrameDistributor = request.app["distributor"]
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(reason="Request body must be valid JSON.")
+
+    if not isinstance(body, dict) or "streaming" not in body:
+        raise web.HTTPBadRequest(reason='Body must be a JSON object with a "streaming" key.')
+
+    value = body["streaming"]
+    if not isinstance(value, bool):
+        raise web.HTTPBadRequest(reason='"streaming" must be a boolean (true or false).')
+
+    distributor.streaming = value
+    log.info("Streaming %s via API.", "enabled" if value else "disabled")
+    return web.json_response({"streaming": distributor.streaming})
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -432,8 +568,10 @@ def make_app(distributor: FrameDistributor, cfg: StreamConfig) -> web.Applicatio
     app.router.add_get("/",             handle_index)
     app.router.add_get("/stream",       handle_stream)
     app.router.add_get("/snapshot",     handle_snapshot)
-    app.router.add_get("/api/settings", handle_get_settings)
-    app.router.add_put("/api/settings", handle_put_settings)
+    app.router.add_get("/api/settings",  handle_get_settings)
+    app.router.add_put("/api/settings",  handle_put_settings)
+    app.router.add_get("/api/streaming", handle_get_streaming)
+    app.router.add_put("/api/streaming", handle_put_streaming)
     return app
 
 
@@ -449,9 +587,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--socket",     default="/tmp/picam_frames.sock", metavar="PATH",
                         help="Unix socket path produced by camera_app.py.")
-    parser.add_argument("--src-width",  type=int, default=1920, metavar="PX",
+    parser.add_argument("--src-width",  type=int, default=1280, metavar="PX",
                         help="Source frame width from camera_app (read-only at runtime).")
-    parser.add_argument("--src-height", type=int, default=1080, metavar="PX",
+    parser.add_argument("--src-height", type=int, default=720, metavar="PX",
                         help="Source frame height from camera_app (read-only at runtime).")
     parser.add_argument("--out-width",  type=int, default=None, metavar="PX",
                         help="Initial output MJPEG width. Defaults to src-width.")
@@ -504,8 +642,10 @@ async def _main(args: argparse.Namespace):
     await site.start()
 
     log.info(
-        "MJPEG server at http://%s:%d/  |  settings API: PUT/GET http://%s:%d/api/settings",
-        args.host, args.port, args.host, args.port,
+        "MJPEG server at http://%s:%d/  |  "
+        "settings: PUT/GET http://%s:%d/api/settings  |  "
+        "streaming: PUT/GET http://%s:%d/api/streaming",
+        args.host, args.port, args.host, args.port, args.host, args.port,
     )
     log.info("Initial config: %s", cfg.get())
 
