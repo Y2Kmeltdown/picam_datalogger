@@ -11,7 +11,7 @@
     "height": 720
   },
 
-  "framerate": 120,
+  "framerate": 60,
 
   "format": "XRGB8888",
 
