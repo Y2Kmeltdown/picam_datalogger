@@ -42,8 +42,9 @@ log = logging.getLogger("picam")
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG: dict = {
-    "resolution": {"width": 1920, "height": 1080},
-    "framerate": 30,
+    "recording_resolution": {"width": 1280, "height": 720},
+    "socket_resolution": {"width": 1280, "height": 720},
+    "framerate": 60,
     "format": "XRGB8888",        # lores / raw-frame pixel format sent over socket
     "output_dir": "recordings",
     "socket_path": "/tmp/picam_frames.sock",
@@ -273,7 +274,7 @@ class SegmentedRecorder:
 
     # ------------------------------------------------------------------
     def configure(self):
-        res = self.cfg["resolution"]
+        res = self.cfg["recording_resolution"]
         w, h = res["width"], res["height"]
         fps = self.cfg["framerate"]
         fmt = self.cfg["format"]
