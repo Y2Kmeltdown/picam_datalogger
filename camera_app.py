@@ -95,11 +95,14 @@ class FrameSocketServer:
     Broadcasts raw lores frames to any number of Unix-socket clients.
 
     Wire format per frame:
-        ┌──────────────────────┬────────────────────────┐
-        │ 4 bytes (uint32 LE)  │  N bytes (raw pixels)  │
-        │ payload length       │  format = cfg["format"]│
-        └──────────────────────┴────────────────────────┘
-    TODO Add timestamp to socket frames
+        ┌──────────────────────┬──────────────────────────┬────────────────────────┐
+        │ 4 bytes (uint32 LE)  │  8 bytes (uint64 LE)     │  N bytes (raw pixels)  │
+        │ payload length       │  capture timestamp (µs)  │  format = cfg["format"]│
+        │                      │  microseconds since epoch│                        │
+        └──────────────────────┴──────────────────────────┴────────────────────────┘
+
+    The timestamp is recorded immediately after capture_array() returns,
+    giving the closest possible approximation to when the Pi received the frame.
     """
 
     def __init__(self, socket_path: str):
@@ -144,21 +147,30 @@ class FrameSocketServer:
     def _accept_loop(self):
         while self._running:
             try:
-                if self._server is not None:
-                    self._server.settimeout(1.0)
-                    conn, _ = self._server.accept()
-                    with self._lock:
-                        self._clients.append(conn)
-                    log.info("New frame client (total: %d).", len(self._clients))
+                self._server.settimeout(1.0)
+                conn, _ = self._server.accept()
+                with self._lock:
+                    self._clients.append(conn)
+                log.info("New frame client (total: %d).", len(self._clients))
             except socket.timeout:
                 continue
             except OSError:
                 break
 
-    def send_frame(self, frame_bytes: bytes):
+    def send_frame(self, frame_bytes: bytes, timestamp_us: int):
+        """
+        Broadcast one frame to all connected clients.
+
+        Args:
+            frame_bytes:   Raw pixel data.
+            timestamp_us:  Capture time as microseconds since the Unix epoch
+                           (int(time.time() * 1_000_000) at the capture site).
+        """
         if not self._clients:
             return
-        payload = struct.pack("<I", len(frame_bytes)) + frame_bytes
+        # Pack length (4 bytes) + timestamp (8 bytes) + pixels
+        header = struct.pack("<IQ", len(frame_bytes), timestamp_us)
+        payload = header + frame_bytes
         dead: list[socket.socket] = []
         with self._lock:
             for client in self._clients:
@@ -181,7 +193,7 @@ class FrameSocketServer:
 # ---------------------------------------------------------------------------
 
 def _utc_filename(output_dir: str) -> str:
-    name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")+ "_picam" + ".h264"
+    name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".h264"
     return os.path.join(output_dir, name)
 
 
@@ -224,7 +236,7 @@ class SegmentingOutput(Output):
         log.info("New segment → '%s'", path)
 
     # ------------------------------------------------------------------
-    def outputframe(self, frame: bytes, keyframe: bool = True, timestamp=None, packet=None, audio=False):
+    def outputframe(self, frame: bytes, keyframe: bool = True, timestamp=None):
         """Called by the encoder for every encoded frame."""
         with self._lock:
             # Roll on the first keyframe after the segment deadline
@@ -261,20 +273,16 @@ class SegmentedRecorder:
 
     # ------------------------------------------------------------------
     def configure(self):
-        rec_res = self.cfg["recording_resolution"]
-        r_w, r_h = rec_res["width"], rec_res["height"]
-
-        soc_res = self.cfg["socket_resolution"]
-        s_w, s_h = soc_res["width"], soc_res["height"]
+        res = self.cfg["resolution"]
+        w, h = res["width"], res["height"]
         fps = self.cfg["framerate"]
         fmt = self.cfg["format"]
 
-        log.info("Configuring: %dx%d @ %d fps | socket format: %s", r_w, r_h, fps, fmt)
+        log.info("Configuring: %dx%d @ %d fps | socket format: %s", w, h, fps, fmt)
 
         video_config = self.camera.create_video_configuration(
-            main={"size": (r_w, r_h), "format": "RGB888"},  # main → H264 encoder
-            lores={"size": (s_w, s_h), "format": fmt},       # lores → Unix socket
-            #raw={"size": self.camera.sensor_resolution},  # 
+            main={"size": (w, h), "format": "RGB888"},  # main → H264 encoder
+            lores={"size": (w, h), "format": fmt},       # lores → Unix socket
             controls={"FrameRate": fps},
         )
         self.camera.configure(video_config)
@@ -290,27 +298,14 @@ class SegmentedRecorder:
         while self._running:
             try:
                 frame = self.camera.capture_array("lores")
-                self.socket_server.send_frame(frame.tobytes())
-                    
+                # Timestamp recorded immediately after capture returns —
+                # this is as close as we can get to the actual sensor receive time.
+                timestamp_us = int(time.time() * 1_000_000)
+                self.socket_server.send_frame(frame.tobytes(), timestamp_us)
             except Exception as exc:
                 if self._running:
                     log.debug("Frame grab error: %s", exc)
         log.info("Frame capture loop stopped.")
-
-    # def _snapshot_loop(self):
-    #     log.info("snapshot capture loop started.")
-    #     while self._running:
-    #         try:
-    #             time.sleep(1)
-    #             #start = time.monotonic_ns()
-    #             #frame = self.camera.capture_array("raw").view(np.uint16)
-    #             #end = time.monotonic_ns()
-    #             #print(end - start)
-                    
-    #         except Exception as exc:
-    #             if self._running:
-    #                 log.debug("snapshot error: %s", exc)
-    #     log.info("snapshot capture loop stopped.")
 
     # ------------------------------------------------------------------
     def run(self):
@@ -323,14 +318,8 @@ class SegmentedRecorder:
         )
         self._frame_thread.start()
 
-        # self._snapshot_thread = threading.Thread(
-        #     target=self._snapshot_loop, daemon=True, name="snapshot-cap"
-        # )
-        # self._snapshot_thread.start()
-
         output = SegmentingOutput(self.cfg["output_dir"], self.segment_duration)
-        #encoder = H264Encoder(quality=Quality.HIGH)
-        encoder = H264Encoder()
+        encoder = H264Encoder(quality=Quality.HIGH)
         self.camera.start_recording(encoder, output)
 
         log.info(

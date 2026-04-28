@@ -9,6 +9,14 @@ multipart/x-mixed-replace MJPEG stream over HTTP using aiohttp.
 Stream parameters (FPS, JPEG quality, output resolution) can be changed
 at runtime via a JSON REST API without restarting the server.
 
+Socket wire format (per frame):
+    [4 bytes LE uint32: payload length]
+    [8 bytes LE uint64: capture timestamp, microseconds since Unix epoch]
+    [N bytes: raw XRGB8888 pixels]
+
+The capture timestamp is forwarded to MJPEG clients as an
+X-Capture-Timestamp header on each multipart part boundary.
+
 Endpoints:
     GET  /                  Embedded viewer HTML page
     GET  /stream            MJPEG multipart stream
@@ -142,6 +150,10 @@ class FrameDistributor:
     per-client asyncio Queues. Slow clients have their oldest frame dropped
     rather than blocking the pipeline.
 
+    Each queue item is a (jpeg_bytes, timestamp_us) tuple so the MJPEG
+    handler can forward the Pi-side capture timestamp to streaming clients
+    as an X-Capture-Timestamp header on each multipart boundary.
+
     The streaming gate (self.streaming) can be toggled via the API.
     When False:
       - publish() still accepts frames so the socket reader keeps draining
@@ -153,13 +165,14 @@ class FrameDistributor:
     """
 
     def __init__(self):
-        self._queues: list[Queue[bytes]] = []
+        self._queues: list[Queue[tuple[bytes, int]]] = []
         self._lock = asyncio.Lock()
         self.latest_jpeg: Optional[bytes] = None
+        self.latest_timestamp_us: int = 0
         self.streaming: bool = True          # gate: controlled by /api/streaming
 
     async def register(self) -> Queue:
-        q: Queue[bytes] = Queue(maxsize=2)
+        q: Queue[tuple[bytes, int]] = Queue(maxsize=2)
         async with self._lock:
             self._queues.append(q)
         log.info("MJPEG client registered (total: %d).", len(self._queues))
@@ -173,9 +186,10 @@ class FrameDistributor:
                 pass
         log.info("MJPEG client unregistered (remaining: %d).", len(self._queues))
 
-    async def publish(self, jpeg: bytes):
-        # Always update latest_jpeg so /snapshot stays current even when paused
+    async def publish(self, jpeg: bytes, timestamp_us: int):
+        # Always update latest_* so /snapshot stays current even when paused
         self.latest_jpeg = jpeg
+        self.latest_timestamp_us = timestamp_us
 
         # Gate: skip fan-out when streaming is disabled
         if not self.streaming:
@@ -190,7 +204,7 @@ class FrameDistributor:
                             q.get_nowait()
                         except asyncio.QueueEmpty:
                             pass
-                    q.put_nowait(jpeg)
+                    q.put_nowait((jpeg, timestamp_us))
                 except Exception:
                     dead.append(q)
             for d in dead:
@@ -256,6 +270,12 @@ async def socket_reader(
     StreamConfig parameters (sampled per-frame so API changes take effect
     immediately), and publishes processed JPEGs to the distributor.
 
+    Reads a 12-byte header before each frame:
+        [4 bytes LE uint32: payload length][8 bytes LE uint64: timestamp µs]
+
+    The timestamp is passed through to the distributor and forwarded to all
+    active /stream clients as an X-Capture-Timestamp MJPEG part header.
+
     Reconnects automatically if camera_app.py is restarted.
     """
     while True:
@@ -265,12 +285,10 @@ async def socket_reader(
             await loop.run_in_executor(None, sock.connect, socket_path)
             log.info("Connected to camera socket.")
 
-            last_sent = 0.0  # monotonic time of the last published frame
-
             while True:
-                # Read the next raw frame (blocking recv — runs on executor)
-                header = await loop.run_in_executor(None, _recv_exactly, sock, 4)
-                (payload_len,) = struct.unpack("<I", header)
+                # Read 12-byte header: [uint32 payload_len][uint64 timestamp_us]
+                header = await loop.run_in_executor(None, _recv_exactly, sock, 12)
+                payload_len, timestamp_us = struct.unpack("<IQ", header)
                 raw = await loop.run_in_executor(None, _recv_exactly, sock, payload_len)
 
                 # Snapshot config atomically before deciding what to do
@@ -288,7 +306,7 @@ async def socket_reader(
                     params["quality"],
                 )
 
-                await distributor.publish(jpeg)
+                await distributor.publish(jpeg, timestamp_us)
 
         except (ConnectionError, ConnectionRefusedError, FileNotFoundError, OSError) as exc:
             log.warning("Socket error: %s — retrying in %.1f s.", exc, reconnect_delay)
@@ -332,11 +350,12 @@ async def handle_stream(request: web.Request) -> web.StreamResponse:
 
     try:
         while True:
-            jpeg = await asyncio.wait_for(q.get(), timeout=10.0)
+            jpeg, timestamp_us = await asyncio.wait_for(q.get(), timeout=10.0)
             part = (
                 f"--{BOUNDARY}\r\n"
                 f"Content-Type: image/jpeg\r\n"
                 f"Content-Length: {len(jpeg)}\r\n"
+                f"X-Capture-Timestamp: {timestamp_us}\r\n"
                 f"\r\n"
             ).encode() + jpeg + b"\r\n"
             await response.write(part)
