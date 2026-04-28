@@ -236,7 +236,7 @@ class SegmentingOutput(Output):
         log.info("New segment → '%s'", path)
 
     # ------------------------------------------------------------------
-    def outputframe(self, frame: bytes, keyframe: bool = True, timestamp=None):
+    def outputframe(self, frame: bytes, keyframe: bool = True, timestamp=None, packet=None, audio=False):
         """Called by the encoder for every encoded frame."""
         with self._lock:
             # Roll on the first keyframe after the segment deadline
