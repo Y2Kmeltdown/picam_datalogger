@@ -320,7 +320,7 @@ class SegmentedRecorder:
         self._frame_thread.start()
 
         output = SegmentingOutput(self.cfg["output_dir"], self.segment_duration)
-        encoder = H264Encoder(framerate=60)
+        encoder = H264Encoder(framerate=self.cfg["framerate"])
         self.camera.start_recording(encoder, output)
 
         log.info(
