@@ -194,7 +194,7 @@ class FrameSocketServer:
 # ---------------------------------------------------------------------------
 
 def _utc_filename(output_dir: str) -> str:
-    name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".h264"
+    name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ_pivideo") + ".h264"
     return os.path.join(output_dir, name)
 
 
@@ -320,7 +320,7 @@ class SegmentedRecorder:
         self._frame_thread.start()
 
         output = SegmentingOutput(self.cfg["output_dir"], self.segment_duration)
-        encoder = H264Encoder()
+        encoder = H264Encoder(framerate=60)
         self.camera.start_recording(encoder, output)
 
         log.info(
