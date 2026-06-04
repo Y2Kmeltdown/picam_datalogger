@@ -64,6 +64,33 @@ log = logging.getLogger("mjpeg")
 
 BOUNDARY = "picamframe"
 
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin":  "*",
+    "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+}
+
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    """
+    Add CORS headers to every response and handle OPTIONS preflights.
+
+    aiohttp raises HTTP exceptions (e.g. HTTPServiceUnavailable for a
+    disabled stream) before the handler returns a response object, so we
+    catch those here and stamp the headers on them too — otherwise the
+    browser sees the error status without ACAO and blocks it as a CORS
+    failure rather than surfacing the real status code.
+    """
+    if request.method == "OPTIONS":
+        return web.Response(status=204, headers=CORS_HEADERS)
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        exc.headers.update(CORS_HEADERS)
+        raise
+    response.headers.update(CORS_HEADERS)
+    return response
+
 
 # ---------------------------------------------------------------------------
 # StreamConfig — single source of truth for all tunable parameters
@@ -341,6 +368,7 @@ async def handle_stream(request: web.Request) -> web.StreamResponse:
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Connection": "close",
+            "Access-Control-Allow-Origin": "*",
         },
     )
     await response.prepare(request)
@@ -581,7 +609,7 @@ async def handle_put_streaming(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 def make_app(distributor: FrameDistributor, cfg: StreamConfig) -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
     app["distributor"] = distributor
     app["cfg"] = cfg
     app.router.add_get("/",             handle_index)
