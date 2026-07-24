@@ -1,0 +1,8 @@
+# Installed into this module's own virtual environment at install time —
+# see eventide-module.json and the eventide docs (docs/MODULES.md).
+#
+# picamera2 comes from apt (python3-picamera2) and stays importable because
+# the venv is created with --system-site-packages; it is NOT pip-installed.
+aiohttp
+numpy
+opencv-python-headless==4.13.0.92

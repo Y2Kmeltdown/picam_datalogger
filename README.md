@@ -7,6 +7,29 @@ A Raspberry Pi 5 camera application that:
 
 ---
 
+## Eventide module
+
+This repository is an installable [Eventide](https://github.com/Y2Kmeltdown/eventide)
+module — `eventide-module.json` at the repo root advertises **two** supervisor
+services that install together from the dashboard's MODULES tab:
+
+| Service | What it does |
+| ------- | ------------ |
+| `pi_camera_datalogger` | Runs `camera_app.py` — segmented H.264 recording into `<recordings_dir>/picam/`, raw frames published to `/tmp/picam_frames.sock`. |
+| `pi_mjpeg_server` | Runs `mjpeg_server.py` — consumes the frame socket and serves an MJPEG live stream on port `8082` (nginx proxies it at `/stream/picam/`). |
+
+Install: open the dashboard → **MODULES** → paste this repo's URL → INSTALL.
+The installer creates a dedicated Python venv for the module, installs
+`requirements.txt` into it, registers both services with supervisord, and
+starts them. `python3-picamera2` and `ffmpeg` are installed system-wide via
+apt (declared in the manifest); the venv uses `--system-site-packages` so
+`picamera2` stays importable.
+
+Manual usage below still works standalone — under Eventide, supervisord runs
+the programs for you.
+
+---
+
 ## Requirements
 
 ### Hardware
