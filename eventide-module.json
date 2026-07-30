@@ -17,22 +17,6 @@
       "description": "Length of each recorded video segment in seconds."
     },
     {
-      "name": "socket_path",
-      "flag": "--socket",
-      "type": "str",
-      "default": "/tmp/picam_frames.sock",
-      "required": false,
-      "description": "Unix socket the datalogger publishes raw frames to; the MJPEG server consumes them."
-    },
-    {
-      "name": "stream_port",
-      "flag": "--port",
-      "type": "int",
-      "default": 8082,
-      "required": true,
-      "description": "Port the MJPEG server binds (nginx proxies /stream/picam/ here)."
-    },
-    {
       "name": "stream_quality",
       "flag": "--quality",
       "type": "int",
@@ -49,16 +33,15 @@
       "description": "Raw-frame socket: pi_camera_datalogger publishes, pi_mjpeg_server consumes."
     },
     {
-      "name": "mjpeg_stream",
+      "name": "mjpeg",
       "type": "tcp",
-      "port": 8082,
-      "description": "MJPEG live stream plus /api/settings and /api/streaming (proxied by nginx at /stream/picam/ and /settings/picam/)."
+      "description": "MJPEG live stream plus /api/settings and /api/streaming. Port allocated by eventide at install time; reachable at /proxy/picam-datalogger/mjpeg/."
     }
   ],
   "programs": [
     {
       "name": "pi_camera_datalogger",
-      "command": "{venv_python} {module_dir}/camera_app.py --config {module_dir}/camera_config.json --output-dir {recordings_dir}/picam/ --socket {arg:socket_path} --segment-duration {arg:segment_duration}",
+      "command": "{venv_python} {module_dir}/camera_app.py --config {module_dir}/camera_config.json --output-dir {recordings_subdir} --socket {socket:frames} --segment-duration {arg:segment_duration}",
       "directory": "{module_dir}",
       "autostart": true,
       "autorestart": true,
@@ -68,7 +51,7 @@
     },
     {
       "name": "pi_mjpeg_server",
-      "command": "{venv_python} {module_dir}/mjpeg_server.py --socket {arg:socket_path} --port {arg:stream_port} --quality {arg:stream_quality}",
+      "command": "{venv_python} {module_dir}/mjpeg_server.py --socket {socket:frames} --port {socket:mjpeg} --quality {arg:stream_quality}",
       "directory": "{module_dir}",
       "autostart": true,
       "autorestart": true,
